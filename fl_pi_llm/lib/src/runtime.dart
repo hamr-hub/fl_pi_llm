@@ -454,6 +454,11 @@ final class FlPiLlm {
       _answerError(callId, 'fetch failed: $e');
       return;
     }
+    // Disposed while connecting: past the requests [dispose] aborted.
+    if (_disposed) {
+      req.abort();
+      return;
+    }
     _requests[callId] = req;
     try {
       final headers = (p['headers'] as Map?)?.cast<String, Object?>() ?? const {};

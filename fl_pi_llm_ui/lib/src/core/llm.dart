@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:fl_lib/fl_lib.dart';
 import 'package:fl_pi_llm/fl_pi_llm.dart';
@@ -43,15 +44,16 @@ abstract final class Llm {
 
   /// After the stores: sessions from before pi-durable are moved out of the
   /// encrypted database into [directory] — by default `agent/` in the app's
-  /// support directory, a SQLite file per chat.
+  /// support directory, a SQLite file per chat, encrypted with [ChatKey].
   ///
-  /// [directory], [credentials] and [externalLibrary] are for tests, which
-  /// have neither a keychain nor an app bundle.
+  /// [directory], [key], [credentials] and [externalLibrary] are for tests,
+  /// which have neither a keychain nor an app bundle.
   ///
   /// [environment] replaces the process's, where [FlPiLlm] reads a provider's
   /// key when none is stored.
   static Future<void> init({
     String? directory,
+    Uint8List? key,
     LlmCredentials? credentials,
     ExternalLibrary? externalLibrary,
     Map<String, String> Function()? environment,
@@ -62,6 +64,7 @@ abstract final class Llm {
     final started = _rt == null;
     _rt ??= await FlPiLlm.start(
       directory: directory ?? '${(await getApplicationSupportDirectory()).path}/agent',
+      key: key ?? await ChatKey.read(),
       credentials: _all,
       externalLibrary: externalLibrary,
       environment: () => SystemProvider.forBuiltins(_environment()),

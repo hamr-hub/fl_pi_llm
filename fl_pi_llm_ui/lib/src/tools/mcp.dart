@@ -309,7 +309,7 @@ abstract final class McpTools {
   /// The headers [id] is sent, to edit them.
   static Map<String, String> headersOf(String id) => McpSecrets.read(id).headers;
 
-  /// The server whose tool [name] is, of [toolName]'s making.
+  /// The server whose tool [name] is, as [LlmMcp.tool] names them.
   static String? serverOfTool(String name) => _servers.keys.firstWhereOrNull((id) => name.startsWith('${id}__'));
 
   /// Where the icon of [id], or of its tool [name], may be, best first.

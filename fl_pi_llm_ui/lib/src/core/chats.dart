@@ -58,33 +58,23 @@ final class UnsupportedAttachment implements Exception {
   String toString() => 'Cannot attach $name: only images and text files up to 512 KB';
 }
 
+/// A chat as another device takes it ([Chats.exportChat]): its entries in
+/// pi's session-file shape, each after its parent, and the uid of the one it
+/// stands on.
+typedef ChatExport = ({List<Map<String, Object?>> entries, String? tip});
+
 /// An open chat: its session, and what the chat view draws.
-///
-/// Outlives its session: a sync that rewrites the session file swaps a new
-/// one in ([Chats.rewrite]), and the chat view keeps drawing this.
 final class OpenChat {
-  OpenChat._(this.id, LlmSession session) {
-    _attach(session);
+  OpenChat._(this.id, this.session) {
+    _sub = session.events.listen(_onEvent);
     running.addListener(Chats.runningChanges.notify);
     approvals.addListener(Chats.runningChanges.notify);
     pendingInput.addListener(Chats.runningChanges.notify);
   }
 
   final String id;
-  late LlmSession _session;
-  late StreamSubscription<LlmEvent> _sub;
-
-  LlmSession get session => _session;
-
-  void _attach(LlmSession s) {
-    _session = s;
-    _sub = s.events.listen(_onEvent);
-  }
-
-  Future<void> _detach() async {
-    await _sub.cancel();
-    await _session.close();
-  }
+  final LlmSession session;
+  late final StreamSubscription<LlmEvent> _sub;
 
   /// The end of the current branch, root first: the last page read, and
   /// those before it that [loadEarlier] read.
@@ -226,7 +216,8 @@ final class OpenChat {
 
   Future<void> _dispose() async {
     _denyPending('The chat was closed');
-    await _detach();
+    await _sub.cancel();
+    await session.close();
   }
 }
 
@@ -321,38 +312,57 @@ abstract final class Chats {
     );
   }
 
-  /// Runs [write], which replaces chat [id]'s session file, with the chat's
-  /// session closed, then opens it again in the same [OpenChat]: the view
-  /// showing it carries on. Returns false, and does not write, while a reply
-  /// is being written.
-  static Future<bool> rewrite(String id, Future<void> Function() write) async {
-    // One being opened is waited for: it would otherwise read the file mid-write.
+  /// Chat [id] for another device ([FlPiLlm.exportSession]): every entry,
+  /// each after its parent, and the uid of the one it stands on. The chat need
+  /// not be open.
+  static Future<ChatExport> exportChat(String id) async {
+    final entries = <Map<String, Object?>>[];
+    int? after;
+    String? tip;
+    do {
+      final page = await Llm.rt.exportSession(id, after: after);
+      entries.addAll(page.entries);
+      tip = page.tip;
+      after = page.next;
+    } while (after != null);
+    return (entries: entries, tip: tip);
+  }
+
+  /// About how much of a chat one import request carries: the engine's heap
+  /// is bounded.
+  static const _importChars = 4 << 20;
+
+  /// Writes what [entries], another device's [exportChat] of chat [id], has
+  /// and the chat lacks ([FlPiLlm.importSession]); [tip] for a chat new here.
+  /// Returns how many entries it wrote. An open chat shows them: now, or when
+  /// the reply it is writing ends.
+  static Future<int> importChat(String id, List<Map<String, Object?>> entries, {String? tip}) async {
+    var added = 0;
+    var page = <Map<String, Object?>>[];
+    var chars = 0;
+    Future<void> send({required bool last}) async {
+      final r = await Llm.rt.importSession(id, page, tip: last ? tip : null);
+      if (r.orphans.isNotEmpty) Loggers.app.warning('Sync $id: ${r.orphans.length} entries without their parent');
+      added += r.added;
+      page = [];
+      chars = 0;
+    }
+
+    for (final e in entries) {
+      page.add(e);
+      chars += jsonEncode(e).length;
+      if (chars >= _importChars) await send(last: false);
+    }
+    await send(last: true);
+    if (added == 0) return 0;
     try {
       await _opening[id];
     } catch (_) {
       // Failed to open: then it is not open.
     }
     final chat = _open[id];
-    if (chat == null) {
-      await write();
-      return true;
-    }
-    if (chat.running.value) return false;
-    await chat._detach();
-    try {
-      await write();
-    } finally {
-      try {
-        chat._attach(await _openSession(id));
-        await chat.reload();
-      } catch (e, s) {
-        Loggers.app.warning('Reopen $id', e, s);
-        _open.remove(id);
-        openChanges.notify();
-        chat.error.value = '$e';
-      }
-    }
-    return true;
+    if (chat != null && !chat.running.value) await chat.reload();
+    return added;
   }
 
   static Future<void> close(String id) async {

@@ -1,4 +1,6 @@
 import 'dart:convert';
+import 'dart:math';
+import 'dart:typed_data';
 
 import 'package:fl_lib/fl_lib.dart';
 import 'package:fl_pi_llm/fl_pi_llm.dart';
@@ -61,5 +63,23 @@ final class KeychainCredentials implements LlmCredentials {
   Future<void> delete(String providerId) async {
     await SecureStore.storage.delete(key: '$_prefix$providerId');
     await _saveIndex([...(await list()).where((e) => e != providerId)]);
+  }
+}
+
+/// What the chats are encrypted with ([FlPiLlm.start]): 32 random bytes in
+/// the platform's keychain, made the first time. Never in a backup: a backup
+/// carries the chats themselves, under its own password.
+abstract final class ChatKey {
+  static const _key = 'llm.chatKey';
+
+  static Future<Uint8List> read() async {
+    final existing = await SecureStore.storage.read(key: _key);
+    if (existing != null) return base64Url.decode(existing);
+    final random = Random.secure();
+    await SecureStore.storage.write(key: _key, value: base64UrlEncode([for (var i = 0; i < 32; i++) random.nextInt(256)]));
+    // Read back: a write that did not land would leave chats nothing can open.
+    final confirmed = await SecureStore.storage.read(key: _key);
+    if (confirmed == null) throw StateError('Failed to keep the chat key');
+    return base64Url.decode(confirmed);
   }
 }
